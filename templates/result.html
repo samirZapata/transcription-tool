@@ -1,0 +1,24 @@
+{# templates/result.html #}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Resultado de Transcripción</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Resultado de Transcripción</h1>
+        
+        <div class="transcription-result">
+            <h2>Transcripción Completada</h2>
+            <div class="transcription-content">
+                {{ transcription_content }}
+            </div>
+            
+            <div class="buttons">
+                <a href="{{ url_for('index') }}" class="button">Volver a Inicio</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

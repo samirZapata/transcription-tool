@@ -1,0 +1,379 @@
+{# templates/index.html #}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Transcriptor de Audio</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+    <div class="container">
+        <h1>Transcriptor de Audio</h1>
+        
+        <div class="input-section">
+            <div class="file-upload">
+                <h2>Subir Archivo de Audio</h2>
+                <form id="fileForm" action="{{ url_for('upload_file') }}" method="post" enctype="multipart/form-data">
+                    <input type="file" id="fileInput" name="file" accept=".mp3,.wav,.ogg,.opus,.m4a">
+                    <button type="submit" id="fileSubmitBtn">Transcribir Archivo</button>
+                </form>
+            </div>
+
+            <div class="youtube-upload">
+                <h2>Transcribir desde YouTube</h2>
+                <form id="youtubeForm" action="{{ url_for('upload_file') }}" method="post">
+                    <input type="url" id="urlInput" name="youtube_url" placeholder="URL del video de YouTube">
+                    <button type="submit" id="youtubeSubmitBtn">Transcribir Video</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="progress-overlay" id="progressOverlay" style="display: none;">
+            <div class="progress-card">
+                <h3>Transcribiendo...</h3>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="progress-info">
+                    <p>Estado: <span id="status">Iniciando...</span></p>
+                    <p>Progreso: <span id="percentage">0%</span></p>
+                    <p>Tiempo estimado: <span id="time">Calculando...</span></p>
+                </div>
+                <div id="progress-error" class="error-message" style="display: none;"></div>
+                <div class="progress-actions" style="text-align: center; margin-top: 15px; display: none;" id="cancelContainer">
+                    <button id="cancelButton" class="clear-button">Cancelar y volver</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="transcription-section">
+            <div class="section-header">
+                <h2>Transcripciones</h2>
+                {% if transcriptions %}
+                <div>
+                    <form action="{{ url_for('index') }}?clear=true" method="post" id="clearForm" style="display: inline;">
+                        <button type="submit" class="clear-button">Limpiar transcripciones</button>
+                    </form>
+                </div>
+                {% endif %}
+            </div>
+
+            {% if transcriptions %}
+                {% for transcription in transcriptions %}
+                <div class="transcription-item">
+                    <div class="transcription-header">
+                        <div class="file-name">{{ transcription.filename }}</div>
+                        <div class="timestamp">{{ transcription.created_at }}</div>
+                    </div>
+                    <div class="transcription-content">{{ transcription.content }}</div>
+                    <div class="transcription-actions">
+                        <a href="{{ url_for('index') }}?download={{ transcription.id }}" class="download-button">
+                            Descargar como TXT
+                        </a>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="no-transcriptions">
+                    <p>No hay transcripciones disponibles. Suba un archivo de audio o proporcione una URL de YouTube.</p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        // Variables globales
+        let progressUpdater = null;
+        let isProcessing = false;
+        
+        // Elementos DOM
+        const progressOverlay = document.getElementById('progressOverlay');
+        const progressFill = document.getElementById('progressFill');
+        const percentageElement = document.getElementById('percentage');
+        const statusElement = document.getElementById('status');
+        const timeElement = document.getElementById('time');
+        const errorElement = document.getElementById('progress-error');
+        const fileInput = document.getElementById('fileInput');
+        const urlInput = document.getElementById('urlInput');
+        const fileSubmitBtn = document.getElementById('fileSubmitBtn');
+        const youtubeSubmitBtn = document.getElementById('youtubeSubmitBtn');
+        const cancelContainer = document.getElementById('cancelContainer');
+        const cancelButton = document.getElementById('cancelButton');
+        
+        // Función para deshabilitar formularios
+        function disableForms() {
+            fileInput.disabled = true;
+            urlInput.disabled = true;
+            fileSubmitBtn.disabled = true;
+            youtubeSubmitBtn.disabled = true;
+        }
+        
+        // Función para habilitar formularios
+        function enableForms() {
+            fileInput.disabled = false;
+            urlInput.disabled = false;
+            fileSubmitBtn.disabled = false;
+            youtubeSubmitBtn.disabled = false;
+        }
+        
+        // Función para mostrar errores
+        function showError(message) {
+            errorElement.textContent = message;
+            errorElement.style.display = 'block';
+            cancelContainer.style.display = 'block';
+        }
+        
+        // Función para mostrar progreso
+        function showProgress() {
+            if (isProcessing) {
+                return; // Ya hay un proceso en curso
+            }
+            
+            // Marcar como procesando
+            isProcessing = true;
+            
+            // Reiniciar UI
+            progressFill.style.width = '0%';
+            percentageElement.textContent = '0%';
+            statusElement.textContent = 'Iniciando...';
+            timeElement.textContent = 'Calculando...';
+            errorElement.style.display = 'none';
+            cancelContainer.style.display = 'none';
+            
+            // Deshabilitar formularios
+            disableForms();
+            
+            // Mostrar overlay
+            progressOverlay.style.display = 'flex';
+            
+            // Iniciar actualización de progreso
+            updateProgress();
+        }
+        
+        // Función para reiniciar UI después de completar o cancelar
+        function resetUI() {
+            isProcessing = false;
+            enableForms();
+            
+            if (progressUpdater) {
+                clearTimeout(progressUpdater);
+                progressUpdater = null;
+            }
+            
+            progressOverlay.style.display = 'none';
+        }
+        
+        // Función para verificar si el servidor está disponible
+        function checkServerStatus() {
+            return fetch('/status', {
+                method: 'GET',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' }
+            })
+            .then(response => response.ok)
+            .catch(() => false);
+        }
+        
+        // Función para actualizar información de progreso
+        function updateProgress() {
+            // Limpiar actualizador anterior
+            if (progressUpdater) {
+                clearTimeout(progressUpdater);
+                progressUpdater = null;
+            }
+            
+            // No actualizar si no estamos procesando
+            if (!isProcessing) {
+                return;
+            }
+            
+            // Verificar servidor antes de solicitar progreso
+            checkServerStatus().then(serverOk => {
+                if (!serverOk) {
+                    showError('El servidor no está respondiendo. Puede que la transcripción aún esté en proceso.');
+                    progressUpdater = setTimeout(updateProgress, 3000);  // Reintento más largo
+                    return;
+                }
+                
+                // Solicitar actualización de progreso
+                fetch('/progress', {
+                    method: 'GET',
+                    headers: {
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Error de servidor: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // Actualizar UI con los datos de progreso
+                    progressFill.style.width = data.percentage + '%';
+                    percentageElement.textContent = data.percentage + '%';
+                    statusElement.textContent = data.status;
+                    timeElement.textContent = data.time_remaining;
+                    
+                    // Mostrar botón de cancelar después de unos segundos
+                    if (data.percentage > 0 && data.percentage < 100) {
+                        setTimeout(() => {
+                            cancelContainer.style.display = 'block';
+                        }, 5000);
+                    }
+                    
+                    // Verificar si hay errores
+                    if (data.status && data.status.startsWith('Error:')) {
+                        showError(data.status);
+                        // Programar una recarga
+                        setTimeout(() => {
+                            resetUI();
+                        }, 10000);
+                        return;
+                    }
+                    
+                    // Verificar si está completo
+                    if (data.percentage >= 100) {
+                        // Finalizado con éxito
+                        setTimeout(() => {
+                            resetUI();
+                            window.location.reload();
+                        }, 1000);
+                        return;
+                    }
+                    
+                    // Continuar actualizando
+                    progressUpdater = setTimeout(updateProgress, 1000);
+                })
+                .catch(error => {
+                    // Error en la solicitud - reintentar
+                    console.error('Error al actualizar progreso:', error);
+                    progressUpdater = setTimeout(updateProgress, 2000);
+                });
+            });
+        }
+
+        // Manejador para formulario de archivo
+        document.getElementById('fileForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            if (isProcessing) {
+                alert('Ya hay una transcripción en proceso. Por favor espere.');
+                return;
+            }
+            
+            const fileInput = this.querySelector('input[type="file"]');
+            if (!fileInput.files || fileInput.files.length === 0) {
+                alert('Por favor seleccione un archivo');
+                return;
+            }
+            
+            const formData = new FormData(this);
+            showProgress();
+            
+            fetch('{{ url_for("upload_file") }}', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Error de servidor: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (!data.success) {
+                    showError(data.message);
+                }
+                // No recargar aquí - dejar que updateProgress lo haga
+            })
+            .catch(error => {
+                console.error('Error en la solicitud:', error);
+                showError('Error en la comunicación con el servidor. Intente nuevamente más tarde.');
+            });
+        });
+
+        // Manejador para formulario de YouTube
+        document.getElementById('youtubeForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            if (isProcessing) {
+                alert('Ya hay una transcripción en proceso. Por favor espere.');
+                return;
+            }
+            
+            const urlInput = this.querySelector('input[type="url"]');
+            if (!urlInput.value.trim()) {
+                alert('Por favor ingrese una URL de YouTube');
+                return;
+            }
+            
+            const formData = new FormData(this);
+            showProgress();
+            
+            fetch('{{ url_for("upload_file") }}', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Error de servidor: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (!data.success) {
+                    showError(data.message);
+                }
+                // No recargar aquí - dejar que updateProgress lo haga
+            })
+            .catch(error => {
+                console.error('Error en la solicitud:', error);
+                showError('Error en la comunicación con el servidor. Intente nuevamente más tarde.');
+            });
+        });
+        
+        // Botón de cancelar
+        cancelButton.addEventListener('click', function() {
+            resetUI();
+        });
+        
+        // Formulario de limpieza (confirmar antes de borrar)
+        if (document.getElementById('clearForm')) {
+            document.getElementById('clearForm').addEventListener('submit', function(e) {
+                if (!confirm('¿Estás seguro de que quieres eliminar todas las transcripciones?')) {
+                    e.preventDefault();
+                }
+            });
+        }
+        
+        // Comprobar estado al cargar
+        window.addEventListener('load', function() {
+            // Si hay una transcripción en proceso, mostrar progreso
+            fetch('/progress', {
+                method: 'GET',
+                headers: {
+                    'Cache-Control': 'no-cache',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.is_processing && data.percentage > 0 && data.percentage < 100) {
+                    showProgress();
+                }
+            })
+            .catch(error => {
+                console.error('Error al verificar progreso inicial:', error);
+            });
+        });
+    </script>
+</body>
+</html>
