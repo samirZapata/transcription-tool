@@ -1,7 +1,10 @@
-# gunicorn_config.py
-bind = "0.0.0.0:10000"
+import os
+
+port = os.environ.get("PORT", "5000")  # Si no está, usa 5000 por defecto
+bind = f"0.0.0.0:{port}"
+
 workers = 2
 threads = 4
-timeout = 300  # 5 minutos para operaciones de larga duración
+timeout = 300
 max_requests = 1000
 max_requests_jitter = 50
