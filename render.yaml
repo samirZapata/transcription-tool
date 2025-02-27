@@ -8,5 +8,4 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0
-    publishDir: .  # Agregar esta línea para especificar el directorio raíz
     autoDeploy: true
