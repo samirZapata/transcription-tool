@@ -3,7 +3,7 @@ services:
     name: transcriptor-audio
     env: python
     plan: free
-    buildCommand: ./build.sh
+    buildCommand: chmod +x build.sh && ./build.sh
     startCommand: gunicorn app:app -c gunicorn_config.py
     envVars:
       - key: PYTHON_VERSION
